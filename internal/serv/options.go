@@ -140,6 +140,8 @@ func HelpText(pid string) string {
 		"-WSSPORT:<x>       - WSS listen port (default 11235)\n" +
 		"-SSH               - Enable SSH server (USERS.BBS login, starts EleBBS)\n" +
 		"-SSHPORT:<x>       - SSH listen port (default 22)\n" +
+		"                     Host keys eleserv_hostkey (Ed25519), eleserv_hostkey_rsa\n" +
+		"                     and eleserv_hostkey_dsa are created in the system path.\n" +
 		"-XA                - Enable anonymous FTPS logins\n\n" +
 		"-CERT:<file>       - PEM certificate (or combined cert+key PEM)\n" +
 		"-KEY:<file>        - PEM private key (optional if -CERT is combined)\n" +

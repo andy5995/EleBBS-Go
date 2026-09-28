@@ -1,12 +1,16 @@
 package sshserv
 
 import (
+	"crypto/dsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,11 +37,12 @@ func Listen(cfg Config) error {
 	if cfg.Port <= 0 {
 		cfg.Port = 22
 	}
-	signer, err := loadHostKey(cfg.G.RaConfig.SysPath)
+	signers, err := loadHostKeys(cfg.G.RaConfig.SysPath)
 	if err != nil {
 		return err
 	}
 	sc := &ssh.ServerConfig{
+		Config:        legacyAlgorithms(),
 		ServerVersion: "SSH-2.0-EleBBS",
 		PasswordCallback: func(conn ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
 			u, ok := userbase.Search(cfg.G, conn.User())
@@ -50,13 +55,18 @@ func Listen(cfg Config) error {
 			}}, nil
 		},
 	}
-	sc.AddHostKey(signer)
+	for _, s := range signers {
+		sc.AddHostKey(s)
+	}
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
 	fmt.Fprintf(os.Stderr, "%sSSH listening on :%d (USERS.BBS logins, starts EleBBS)\n", cfgrec.SystemMsgPrefix, cfg.Port)
+	for _, s := range signers {
+		fmt.Fprintf(os.Stderr, "%sSSH host key %s %s\n", cfgrec.SystemMsgPrefix, s.PublicKey().Type(), ssh.FingerprintSHA256(s.PublicKey()))
+	}
 
 	tn := config.LoadTelnet(cfg.G)
 	for {
@@ -191,20 +201,88 @@ func (s *sshStream) SetWriteDeadline(time.Time) error { return nil }
 
 var _ io.ReadWriteCloser = (*sshStream)(nil)
 
-func loadHostKey(sysPath string) (ssh.Signer, error) {
-	p := filepath.Join(strings.TrimRight(strings.TrimSpace(sysPath), `\/`), "eleserv_hostkey")
+// loadHostKeys returns the Ed25519 (eleserv_hostkey), RSA
+// (eleserv_hostkey_rsa) and DSA (eleserv_hostkey_dsa) host keys from the
+// system path, creating missing ones. The RSA key serves clients without
+// Ed25519 as rsa-sha2-256, rsa-sha2-512 or ssh-rsa; the DSA key is ssh-dss
+// for the oldest terminal programs.
+func loadHostKeys(sysPath string) ([]ssh.Signer, error) {
+	dir := strings.TrimRight(strings.TrimSpace(sysPath), `\/`)
+	ed, err := loadHostKey(filepath.Join(dir, "eleserv_hostkey"), func() (any, *pem.Block, error) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(priv)
+		if err != nil {
+			return nil, nil, err
+		}
+		return priv, &pem.Block{Type: "PRIVATE KEY", Bytes: der}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	rs, err := loadHostKey(filepath.Join(dir, "eleserv_hostkey_rsa"), func() (any, *pem.Block, error) {
+		priv, err := rsa.GenerateKey(rand.Reader, rsaHostKeyBits)
+		if err != nil {
+			return nil, nil, err
+		}
+		return priv, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	ds, err := loadHostKey(filepath.Join(dir, "eleserv_hostkey_dsa"), func() (any, *pem.Block, error) {
+		priv := &dsa.PrivateKey{}
+		if err := dsa.GenerateParameters(&priv.Parameters, rand.Reader, dsa.L1024N160); err != nil {
+			return nil, nil, err
+		}
+		if err := dsa.GenerateKey(priv, rand.Reader); err != nil {
+			return nil, nil, err
+		}
+		der, err := asn1.Marshal(struct {
+			Version       int
+			P, Q, G, Y, X *big.Int
+		}{0, priv.P, priv.Q, priv.G, priv.Y, priv.X})
+		if err != nil {
+			return nil, nil, err
+		}
+		return priv, &pem.Block{Type: "DSA PRIVATE KEY", Bytes: der}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []ssh.Signer{ed, rs, ds}, nil
+}
+
+// rsaHostKeyBits is 2048 because older SSH libraries in terminal programs
+// (NetRunner, SyncTERM) do not all accept larger RSA host keys.
+const rsaHostKeyBits = 2048
+
+// legacyAlgorithms is the modern algorithm list followed by the SHA-1 key
+// exchanges and CBC ciphers that older terminal programs need. Clients that
+// support the modern ones never pick these.
+func legacyAlgorithms() ssh.Config {
+	sup, old := ssh.SupportedAlgorithms(), ssh.InsecureAlgorithms()
+	return ssh.Config{
+		KeyExchanges: append(sup.KeyExchanges, old.KeyExchanges...),
+		Ciphers:      append(sup.Ciphers, ssh.InsecureCipherAES128CBC, ssh.InsecureCipherTripleDESCBC),
+		MACs:         append(sup.MACs, old.MACs...),
+	}
+}
+
+func loadHostKey(p string, generate func() (any, *pem.Block, error)) (ssh.Signer, error) {
 	if b, err := os.ReadFile(p); err == nil {
-		return ssh.ParsePrivateKey(b)
+		s, err := ssh.ParsePrivateKey(b)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+		return s, nil
 	}
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, block, err := generate()
 	if err != nil {
 		return nil, err
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	_ = os.WriteFile(p, pemBytes, 0600)
+	_ = os.WriteFile(p, pem.EncodeToMemory(block), 0600)
 	return ssh.NewSignerFromKey(priv)
 }
