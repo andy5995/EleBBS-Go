@@ -73,6 +73,9 @@ type IO struct {
 	hung      bool
 	hangC     chan struct{}
 	lost      bool // the caller's stream failed (carrier lost)
+	// pendingCR is a CR that arrived with nothing after it yet. The next
+	// LF or NUL is the rest of that Enter (telnet NVT CR LF / CR NUL).
+	pendingCR bool
 }
 
 // ErrIdle is Pascal CheckIdle's inactivity hangup.
@@ -500,11 +503,19 @@ func (t *IO) GetKey(timeout time.Duration) (byte, error) {
 			return 0, err
 		}
 		if b, sysop, ok := t.popPush(); ok {
+			if t.eatPendingCRMate(b) {
+				continue
+			}
+			t.noteCR(b)
 			t.FromSysop = sysop
 			t.touchIdle()
 			return b, nil
 		}
 		if b, ok := t.pollLocal(); ok {
+			if t.eatPendingCRMate(b) {
+				continue
+			}
+			t.noteCR(b)
 			t.FromSysop = true
 			t.touchIdle()
 			return b, nil
@@ -543,6 +554,10 @@ func (t *IO) GetKey(timeout time.Duration) (byte, error) {
 		var buf [1]byte
 		n, err := t.S.Read(buf[:])
 		if n == 1 {
+			if t.eatPendingCRMate(buf[0]) {
+				continue
+			}
+			t.noteCR(buf[0])
 			t.FromSysop = false
 			t.touchIdle()
 			return buf[0], nil
@@ -717,6 +732,21 @@ func (t *IO) PeekKey() (byte, bool) {
 	}
 	t.pushFrom([]byte{ch}, t.FromSysop)
 	return ch, true
+}
+
+func (t *IO) eatPendingCRMate(b byte) bool {
+	if t == nil || !t.pendingCR {
+		return false
+	}
+	t.pendingCR = false
+	return b == '\n' || b == 0
+}
+
+func (t *IO) noteCR(b byte) {
+	if t == nil {
+		return
+	}
+	t.pendingCR = b == '\r'
 }
 
 // FinishEnter swallows the LF after CR (or CR after LF) so the next prompt

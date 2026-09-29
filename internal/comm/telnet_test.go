@@ -52,3 +52,59 @@ func TestTelnetCollapsesCRLFAndCRNUL(t *testing.T) {
 		}
 	}
 }
+
+type chunkStream struct {
+	chunks [][]byte
+	out    bytes.Buffer
+}
+
+func (s *chunkStream) Read(p []byte) (int, error) {
+	if len(s.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, s.chunks[0])
+	s.chunks[0] = s.chunks[0][n:]
+	if len(s.chunks[0]) == 0 {
+		s.chunks = s.chunks[1:]
+	}
+	return n, nil
+}
+func (s *chunkStream) Write(p []byte) (int, error)      { return s.out.Write(p) }
+func (s *chunkStream) Close() error                     { return nil }
+func (s *chunkStream) SetReadDeadline(time.Time) error  { return nil }
+func (s *chunkStream) SetWriteDeadline(time.Time) error { return nil }
+func (s *chunkStream) Local() bool                      { return false }
+
+func readTelnetKeys(t *testing.T, tn *Telnet) []byte {
+	t.Helper()
+	var got []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := tn.Read(buf)
+		if n > 0 {
+			got = append(got, buf[:n]...)
+		}
+		if err != nil {
+			return got
+		}
+	}
+}
+
+func TestTelnetRemembersBareCRDropsNextLForNUL(t *testing.T) {
+	cases := []struct {
+		chunks [][]byte
+		want   string
+	}{
+		{[][]byte{{'\r'}, {'\n', 'X'}}, "\rX"},
+		{[][]byte{{'\r'}, {0, 'X'}}, "\rX"},
+		{[][]byte{{'A', '\r'}, {'\n', 'B'}}, "A\rB"},
+		{[][]byte{{'\r'}, {'A'}}, "\rA"},
+	}
+	for _, c := range cases {
+		tn := NewTelnet(&chunkStream{chunks: append([][]byte(nil), c.chunks...)})
+		got := readTelnetKeys(t, tn)
+		if string(got) != c.want {
+			t.Fatalf("chunks %q got %q want %q", c.chunks, got, c.want)
+		}
+	}
+}

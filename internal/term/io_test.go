@@ -879,6 +879,44 @@ func TestDrainLineEndsDropsCRNULBurst(t *testing.T) {
 	}
 }
 
+func TestGetKeyDropsLFAfterBareCR(t *testing.T) {
+	st := &keyStream{in: []byte{'\r', '\n', 'M'}}
+	tio := New(st, &cfgrec.GlobalCfg{}, &cfgrec.LineCfg{})
+	ch, err := tio.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != '\r' {
+		t.Fatalf("first %q", ch)
+	}
+	ch, err = tio.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 'M' {
+		t.Fatalf("leftover mate passed through, next=%q rest=%q", ch, st.in)
+	}
+}
+
+func TestGetKeyDropsNULAfterBareCR(t *testing.T) {
+	st := &keyStream{in: []byte{'\r', 0, 'M'}}
+	tio := New(st, &cfgrec.GlobalCfg{}, &cfgrec.LineCfg{})
+	ch, err := tio.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != '\r' {
+		t.Fatalf("first %q", ch)
+	}
+	ch, err = tio.GetKey(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 'M' {
+		t.Fatalf("leftover NUL passed through, next=%q rest=%q", ch, st.in)
+	}
+}
+
 func TestGetStringCapitalizesWordsLive(t *testing.T) {
 	st := &keyStream{in: []byte("martin kazmaier\r")}
 	tio := New(st, &cfgrec.GlobalCfg{}, &cfgrec.LineCfg{})

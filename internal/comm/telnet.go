@@ -24,10 +24,11 @@ const (
 // Telnet wraps a stream, stripping IAC sequences and answering WILL/DO with WONT/DONT
 // except for binary/echo/sga which we accept.
 type Telnet struct {
-	s      Stream
-	r      *bufio.Reader
-	mu     sync.Mutex
-	closed bool
+	s         Stream
+	r         *bufio.Reader
+	mu        sync.Mutex
+	closed    bool
+	pendingCR bool // CR arrived with no mate yet; drop a following LF or NUL
 }
 
 func NewTelnet(s Stream) *Telnet {
@@ -57,10 +58,20 @@ func (t *Telnet) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if b != iac {
+			if t.pendingCR {
+				t.pendingCR = false
+				if b == '\n' || b == 0 {
+					continue
+				}
+			}
 			// SyncTERM and other NVT clients send CR LF or CR NUL for Enter.
-			if b == '\r' && t.r.Buffered() > 0 {
-				if peek, err := t.r.Peek(1); err == nil && len(peek) == 1 && (peek[0] == '\n' || peek[0] == 0) {
-					_, _ = t.r.ReadByte()
+			if b == '\r' {
+				if t.r.Buffered() > 0 {
+					if peek, err := t.r.Peek(1); err == nil && len(peek) == 1 && (peek[0] == '\n' || peek[0] == 0) {
+						_, _ = t.r.ReadByte()
+					}
+				} else {
+					t.pendingCR = true
 				}
 			}
 			p[n] = b
