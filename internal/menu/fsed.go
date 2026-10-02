@@ -642,11 +642,16 @@ func buildQuoteLines(g *cfgrec.GlobalCfg, origTo, origFrom, origDate string, bod
 	}
 	hdr := "* In a message originally to " + origTo + ", " + origFrom + " said:"
 	out := []string{hdr, ""}
+	// Pascal WriteMessage keeps blank lines, without the quote prefix.
 	for _, ln := range mail.WrapLines(body, width) {
 		if pascal.Trim(ln) == "" {
+			out = append(out, "")
 			continue
 		}
 		out = append(out, prefix+ln)
+	}
+	for len(out) > 2 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
 	}
 	return out
 }

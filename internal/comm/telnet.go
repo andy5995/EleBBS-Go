@@ -28,14 +28,77 @@ type Telnet struct {
 	r         *bufio.Reader
 	mu        sync.Mutex
 	closed    bool
-	pendingCR bool // CR arrived with no mate yet; drop a following LF or NUL
+	pendingCR bool      // CR arrived with no mate yet; drop a following LF or NUL
+	usWill    [256]bool // we already sent WILL
+	usDo      [256]bool // we already sent DO
+	saidWont  [256]bool // we already sent WONT (do not resend)
+	saidDont  [256]bool // we already sent DONT (do not resend)
 }
 
 func NewTelnet(s Stream) *Telnet {
 	t := &Telnet{s: s, r: bufio.NewReaderSize(s, 4096)}
-	// Offer: suppress GA, will echo, binary
-	_, _ = s.Write([]byte{iac, will, 3, iac, will, 1, iac, will, 0, iac, do_, 0})
+	// Offer once: suppress GA, echo, binary. Do not send these again on later DOs.
+	t.sendWill(3)
+	t.sendWill(1)
+	t.sendWill(0)
+	t.sendDo(0)
 	return t
+}
+
+func acceptTelnetOpt(opt byte) bool {
+	return opt == 0 || opt == 1 || opt == 3
+}
+
+func (t *Telnet) sendIAC(cmd, opt byte) {
+	_, _ = t.s.Write([]byte{iac, cmd, opt})
+}
+
+func (t *Telnet) sendWill(opt byte) {
+	t.mu.Lock()
+	if t.usWill[opt] {
+		t.mu.Unlock()
+		return
+	}
+	t.usWill[opt] = true
+	t.saidWont[opt] = false
+	t.mu.Unlock()
+	t.sendIAC(will, opt)
+}
+
+func (t *Telnet) sendDo(opt byte) {
+	t.mu.Lock()
+	if t.usDo[opt] {
+		t.mu.Unlock()
+		return
+	}
+	t.usDo[opt] = true
+	t.saidDont[opt] = false
+	t.mu.Unlock()
+	t.sendIAC(do_, opt)
+}
+
+func (t *Telnet) sendWont(opt byte) {
+	t.mu.Lock()
+	if t.saidWont[opt] {
+		t.mu.Unlock()
+		return
+	}
+	t.saidWont[opt] = true
+	t.usWill[opt] = false
+	t.mu.Unlock()
+	t.sendIAC(wont, opt)
+}
+
+func (t *Telnet) sendDont(opt byte) {
+	t.mu.Lock()
+	if t.saidDont[opt] {
+		t.mu.Unlock()
+		return
+	}
+	t.saidDont[opt] = true
+	t.usDo[opt] = false
+	t.mu.Unlock()
+	t.sendIAC(dont, opt)
 }
 
 func (t *Telnet) Local() bool { return false }
@@ -112,30 +175,23 @@ func (t *Telnet) Read(p []byte) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		var reply byte
 		switch cmd {
-		case will, do_:
-			switch opt {
-			case 0, 1, 3:
-				if cmd == will {
-					reply = do_
-				} else {
-					reply = will
-				}
-			default:
-				if cmd == will {
-					reply = dont
-				} else {
-					reply = wont
-				}
+		case will:
+			if acceptTelnetOpt(opt) {
+				t.sendDo(opt)
+			} else {
+				t.sendDont(opt)
+			}
+		case do_:
+			if acceptTelnetOpt(opt) {
+				t.sendWill(opt)
+			} else {
+				t.sendWont(opt)
 			}
 		case wont:
-			reply = dont
+			t.sendDont(opt)
 		case dont:
-			reply = wont
-		}
-		if reply != 0 {
-			_, _ = t.s.Write([]byte{iac, reply, opt})
+			t.sendWont(opt)
 		}
 	}
 	return n, nil

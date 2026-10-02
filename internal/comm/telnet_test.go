@@ -108,3 +108,36 @@ func TestTelnetRemembersBareCRDropsNextLForNUL(t *testing.T) {
 		}
 	}
 }
+
+func TestTelnetDoesNotResendOffersOnLaterDO(t *testing.T) {
+	wantOffer := []byte{iac, will, 3, iac, will, 1, iac, will, 0, iac, do_, 0}
+	agree := []byte{
+		iac, do_, 3, iac, do_, 1, iac, do_, 0, iac, will, 0,
+	}
+	st := &rwBytes{in: append(append(append([]byte{}, agree...), 'X'), append(agree, 'Y')...)}
+	tn := NewTelnet(st)
+	if !bytes.Equal(st.out.Bytes(), wantOffer) {
+		t.Fatalf("initial offers %x want %x", st.out.Bytes(), wantOffer)
+	}
+	got := readTelnetKeys(t, tn)
+	if string(got) != "XY" {
+		t.Fatalf("data %q", got)
+	}
+	if !bytes.Equal(st.out.Bytes(), wantOffer) {
+		t.Fatalf("resent telnet options after DO: %x", st.out.Bytes())
+	}
+}
+
+func TestTelnetRefusesUnknownOptionOnce(t *testing.T) {
+	st := &rwBytes{in: []byte{iac, will, 24, iac, will, 24, 'Z'}}
+	tn := NewTelnet(st)
+	got := readTelnetKeys(t, tn)
+	if string(got) != "Z" {
+		t.Fatalf("data %q", got)
+	}
+	dont := []byte{iac, dont, 24}
+	n := bytes.Count(st.out.Bytes(), dont)
+	if n != 1 {
+		t.Fatalf("DONT TERM count %d out %x", n, st.out.Bytes())
+	}
+}

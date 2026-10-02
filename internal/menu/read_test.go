@@ -271,6 +271,24 @@ func TestShowMessagePagesSoftCRBody(t *testing.T) {
 	}
 }
 
+func TestBuildQuoteLinesKeepsBlankLines(t *testing.T) {
+	q := buildQuoteLines(nil, "Bob", "Alice Jones", "01-02-06 15:04", "Hello Bob,\r\rFirst paragraph.\rSecond line.\r\r\rBye\r\r")
+	want := []string{
+		"* In a message originally to Bob, Alice Jones said:",
+		"",
+		"AJ> Hello Bob,",
+		"",
+		"AJ> First paragraph.",
+		"AJ> Second line.",
+		"",
+		"",
+		"AJ> Bye",
+	}
+	if strings.Join(q, "|") != strings.Join(want, "|") {
+		t.Fatalf("quote\n%q\nwant\n%q", q, want)
+	}
+}
+
 func TestBuildQuoteLinesWrapsSoftCR(t *testing.T) {
 	body := "First line of text that continues" + string(mail.SoftCR) + "without a hard return and needs wrapping for quotes."
 	q := buildQuoteLines(nil, "Bob", "Alice", "01-02-06 15:04", body)
