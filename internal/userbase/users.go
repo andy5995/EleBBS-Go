@@ -10,15 +10,24 @@ import (
 
 	"elebbs/internal/cfgrec"
 	"elebbs/internal/crc"
+	"elebbs/internal/dospath"
 	"elebbs/internal/pascal"
 )
 
 func stringsTrim(s string) string { return pascal.Trim(s) }
 
+const sep = string(filepath.Separator)
+
+// cleanDir puts p in host form with no trailing separator. Off Windows a
+// drive letter is removed, so C:\ELE\MSGBASE takes the drive-root path below.
 func cleanDir(p string) string {
 	p = stringsTrim(p)
-	p = strings.ReplaceAll(p, "/", `\`)
-	return strings.TrimRight(p, `\`)
+	if filepath.Separator == '/' {
+		p = dospath.ToHost(p)
+	} else {
+		p = strings.ReplaceAll(p, "/", `\`)
+	}
+	return strings.TrimRight(p, sep)
 }
 
 // isDriveRootRel is a Windows path like \ele\msgbase — not a drive letter,
@@ -58,8 +67,8 @@ func withVolume(g *cfgrec.GlobalCfg, p string) string {
 }
 
 func suffixAfter(p, prefix string) string {
-	a := strings.Trim(cleanDir(p), `\`)
-	b := strings.Trim(cleanDir(prefix), `\`)
+	a := strings.Trim(cleanDir(p), sep)
+	b := strings.Trim(cleanDir(prefix), sep)
 	if a == "" {
 		return ""
 	}
@@ -70,19 +79,19 @@ func suffixAfter(p, prefix string) string {
 	if al == bl {
 		return ""
 	}
-	if strings.HasPrefix(al, bl+`\`) {
+	if strings.HasPrefix(al, bl+sep) {
 		return a[len(b)+1:]
 	}
 	return a
 }
 
 func dirExists(p string) bool {
-	st, err := os.Stat(p)
+	st, err := os.Stat(dospath.Resolve(p))
 	return err == nil && st.IsDir()
 }
 
 func fileExists(p string) bool {
-	st, err := os.Stat(p)
+	st, err := os.Stat(dospath.Resolve(p))
 	return err == nil && !st.IsDir()
 }
 
@@ -91,7 +100,9 @@ func absDir(g *cfgrec.GlobalCfg, p string) string {
 	if p == "" {
 		return ""
 	}
-	if filepath.IsAbs(p) {
+	// Off Windows every absolute path is drive-root relative, so it also gets
+	// the CONFIG.RA-directory fallback below.
+	if filepath.IsAbs(p) && !isDriveRootRel(p) {
 		return p
 	}
 	if isDriveRootRel(p) {
@@ -163,7 +174,7 @@ func userDir(g *cfgrec.GlobalCfg) string {
 	var best string
 	var bestSize int64 = -1
 	for _, dir := range dirs {
-		p := filepath.Join(dir, cfgrec.UserBaseName)
+		p := dospath.Resolve(filepath.Join(dir, cfgrec.UserBaseName))
 		st, err := os.Stat(p)
 		if err != nil || st.IsDir() {
 			continue
@@ -187,7 +198,7 @@ func Path(g *cfgrec.GlobalCfg, name string) string {
 	if dir == "" {
 		return name
 	}
-	return filepath.Join(dir, name)
+	return dospath.Resolve(filepath.Join(dir, name))
 }
 
 func yes(v byte) bool { return v == cfgrec.AskYes }
