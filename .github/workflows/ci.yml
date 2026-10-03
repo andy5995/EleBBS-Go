@@ -53,11 +53,8 @@ jobs:
           go test $(go list ./... | grep -vxF \
             -e elebbs/internal/config \
             -e elebbs/internal/files \
-            -e elebbs/internal/ftp \
             -e elebbs/internal/logon \
             -e elebbs/internal/mail \
             -e elebbs/internal/menu \
-            -e elebbs/internal/nntp \
             -e elebbs/internal/quest \
-            -e elebbs/internal/term \
-            -e elebbs/internal/userbase)
+            -e elebbs/internal/term)
